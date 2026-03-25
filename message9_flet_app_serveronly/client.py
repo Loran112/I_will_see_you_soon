@@ -93,7 +93,7 @@ class FletTelegramClient:
                     self.usernames_by_id[user_id] = username
 
     def _setup_page(self):
-        self.page.title = "Message9 Flet"
+        self.page.title = "Miramsg"
         self.page.theme_mode = ft.ThemeMode.DARK
         self.page.theme = ft.Theme(visual_density=ft.VisualDensity.STANDARD)
         self.page.padding = 0
@@ -126,6 +126,12 @@ class FletTelegramClient:
             return
         try:
             self.page.update()
+        except Exception:
+            pass
+
+    def _scroll_messages_to_bottom(self):
+        try:
+            self.messages.scroll_to(offset=-1, duration=0)
         except Exception:
             pass
 
@@ -586,8 +592,21 @@ class FletTelegramClient:
             self.messages.controls.append(self._message_control(ts, sender, text))
             self.refresh_chats()
             self._safe_update()
+            self._scroll_messages_to_bottom()
         else:
             self.refresh_chats()
+
+    def _avatar_url_for_sender(self, sender: str) -> str:
+        if sender in {"System", "system"}:
+            return ""
+        if self.current_username and sender == self.current_nickname:
+            return self._profile_by_username(self.current_username).get("avatar_url", "")
+        for username, profile in self.profiles.items():
+            if profile.get("nickname") == sender:
+                return profile.get("avatar_url", "")
+        if sender in self.profiles:
+            return self.profiles.get(sender, {}).get("avatar_url", "")
+        return ""
 
     def _chat_avatar(self, chat_id, size):
         return self.avatar(self._chat_avatar_label(chat_id), size, self._avatar_url_for_chat(chat_id))
@@ -691,7 +710,8 @@ class FletTelegramClient:
     def _message_control(self, ts, sender, text):
         mine = {self.current_username, self.current_nickname}
         is_me = sender in mine
-        body_controls = [ft.Text(f"{sender} - {ts}", size=11, color="#9fb0c4")]
+        avatar_control = self.avatar(sender, 34, self._avatar_url_for_sender(sender))
+        body_controls = [ft.Text(f"{sender}  {ts}", size=11, color="#9fb0c4")]
         image_url = self._image_url_from_text(text)
         if image_url:
             body_controls.append(
@@ -704,21 +724,22 @@ class FletTelegramClient:
             )
         else:
             body_controls.append(ft.Text(text, selectable=True, size=14))
+        bubble = ft.Container(
+            width=500,
+            bgcolor="#2563eb" if is_me else "#1b2635",
+            border_radius=12,
+            padding=12,
+            content=ft.Column(
+                spacing=5,
+                tight=True,
+                controls=body_controls,
+            ),
+        )
+        row_controls = [bubble, avatar_control] if is_me else [avatar_control, bubble]
         return ft.Row(
             alignment=ft.MainAxisAlignment.END if is_me else ft.MainAxisAlignment.START,
-            controls=[
-                ft.Container(
-                    width=520,
-                    bgcolor="#2563eb" if is_me else "#1b2635",
-                    border_radius=12,
-                    padding=12,
-                    content=ft.Column(
-                        spacing=5,
-                        tight=True,
-                        controls=body_controls,
-                    ),
-                ),
-            ],
+            spacing=8,
+            controls=row_controls,
         )
 
     def switch_chat(self, chat_id, force=False):
@@ -729,6 +750,7 @@ class FletTelegramClient:
         self.messages.controls = [self._message_control(ts, sender, text) for ts, sender, text in self.db.get_messages(chat_id)]
         self.refresh_chats(update=False)
         self._safe_update()
+        self._scroll_messages_to_bottom()
 
     def refresh_if_current(self, chat_id):
         if self.current_chat == chat_id:
@@ -803,8 +825,22 @@ class FletTelegramClient:
             items = [ft.TextButton("View profile", on_click=lambda e: self.show_profile_for_dm(chat_id)), ft.TextButton("Create group with user", on_click=lambda e: self.group_from_dm(chat_id)), ft.TextButton("Delete chat", on_click=lambda e: self.delete_dm(chat_id))]
         elif chat_id.startswith("group:"):
             items = [ft.TextButton("View group", on_click=lambda e: self.show_chat_info(chat_id)), ft.TextButton("Add user", on_click=lambda e: self.add_group_user(chat_id))]
-        if not items: return
-        dialog = ft.AlertDialog(modal=True, title=ft.Text(self.chat_title_for(chat_id)), content=ft.Column(items, tight=True))
+        if not items:
+            return
+        content_controls = list(items)
+        if chat_id.startswith("group:"):
+            content_controls = [
+                ft.Row(
+                    spacing=10,
+                    controls=[
+                        self.avatar(self.chat_title_for(chat_id), 38),
+                        ft.Text(self.chat_title_for(chat_id), weight=ft.FontWeight.W_600),
+                    ],
+                ),
+                ft.Divider(),
+                *items,
+            ]
+        dialog = ft.AlertDialog(modal=True, title=ft.Text(self.chat_title_for(chat_id)), content=ft.Column(content_controls, tight=True))
         for item in items:
             fn = item.on_click
             item.on_click = lambda e, f=fn, d=dialog: (self.page.pop_dialog(), f(e))
@@ -935,6 +971,7 @@ class FletTelegramClient:
                     tight=True,
                     spacing=10,
                     controls=[
+                        ft.Row(spacing=10, controls=[self.avatar(self.group_titles.get(gid, f"Group {gid}"), 48), ft.Text(self.group_titles.get(gid, f"Group {gid}"), weight=ft.FontWeight.W_600)]),
                         ft.Text(f"Group ID: {gid}"),
                         ft.Text(f"Members: {len(members)}"),
                         ft.Divider(),
